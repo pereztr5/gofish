@@ -22,7 +22,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/stmcginnis/gofish/schemas"
+	"github.com/stmcginnis/gofish/common"
+	"github.com/stmcginnis/gofish/redfish"
 )
 
 const userAgent = "gofish/1.0"
@@ -44,7 +45,7 @@ type APIClient struct {
 	Service *Service
 
 	// Auth information saved for later to be able to log out
-	auth *schemas.AuthToken
+	auth *redfish.AuthToken
 
 	// sem used to limit number of concurrent requests
 	sem chan bool
@@ -55,7 +56,7 @@ type APIClient struct {
 	// keepAlive is a flag to indicate if we should try to keep idle connections open
 	keepAlive bool
 
-	Settings schemas.ClientSettings
+	Settings common.ClientSettings
 }
 
 // Session holds the session ID and auth token needed to identify an
@@ -183,20 +184,20 @@ func setupClientWithConfig(ctx context.Context, config *ClientConfig) (c *APICli
 
 	// Init default settings
 	if config.AutoExpand && client.Service != nil {
-		expand := schemas.ExpandNone
+		expand := common.ExpandNone
 		protocolFeats := client.Service.ProtocolFeaturesSupported
 		if protocolFeats.ExpandQuery.NoLinks {
-			expand = schemas.ExpandOptionPeriod
+			expand = common.ExpandOptionPeriod
 		} else if protocolFeats.ExpandQuery.Links {
-			expand = schemas.ExpandOptionTilde
+			expand = common.ExpandOptionTilde
 		} else if protocolFeats.ExpandQuery.ExpandAll {
-			expand = schemas.ExpandOptionAsterisk
+			expand = common.ExpandOptionAsterisk
 		}
 
-		if expand != schemas.ExpandNone {
+		if expand != common.ExpandNone {
 			client.Settings.DefaultQueryOptions = append(client.Settings.DefaultQueryOptions,
-				schemas.WithCollectionQueryOpts(schemas.WithExpand(expand),
-					schemas.WithExpandFallback(true)))
+				common.WithCollectionQueryOpts(common.WithExpand(expand),
+					common.WithExpandFallback(true)))
 		}
 	}
 
@@ -228,14 +229,14 @@ func setupClientWithEndpoint(ctx context.Context, endpoint string) (c *APIClient
 // setupClientAuth setups the authentication in the client using the client config
 func (c *APIClient) setupClientAuth(config *ClientConfig) error {
 	if config.Session != nil {
-		c.auth = &schemas.AuthToken{
+		c.auth = &redfish.AuthToken{
 			Session: config.Session.ID,
 			Token:   config.Session.Token,
 		}
 	} else if config.Username != "" {
-		var auth *schemas.AuthToken
+		var auth *redfish.AuthToken
 		if config.BasicAuth {
-			auth = &schemas.AuthToken{
+			auth = &redfish.AuthToken{
 				Username:  config.Username,
 				Password:  config.Password,
 				BasicAuth: true,
@@ -358,7 +359,7 @@ func (c *APIClient) Head(url string) (*http.Response, error) {
 func (c *APIClient) HeadWithHeaders(url string, customHeaders map[string]string) (*http.Response, error) {
 	relativePath := url
 	if relativePath == "" {
-		relativePath = schemas.DefaultServiceRoot
+		relativePath = common.DefaultServiceRoot
 	}
 
 	return c.runRequestWithHeaders(http.MethodHead, relativePath, nil, customHeaders)
@@ -373,19 +374,19 @@ func (c *APIClient) Get(url string) (*http.Response, error) {
 func (c *APIClient) GetWithHeaders(url string, customHeaders map[string]string) (*http.Response, error) {
 	relativePath := url
 	if relativePath == "" {
-		relativePath = schemas.DefaultServiceRoot
+		relativePath = common.DefaultServiceRoot
 	}
 
 	return c.runRequestWithHeaders(http.MethodGet, relativePath, nil, customHeaders)
 }
 
 // Post performs a Post request against the Redfish service.
-func (c *APIClient) Post(url string, payload any) (*http.Response, error) {
+func (c *APIClient) Post(url string, payload interface{}) (*http.Response, error) {
 	return c.PostWithHeaders(url, payload, nil)
 }
 
 // PostWithHeaders performs a Post request against the Redfish service but allowing custom headers
-func (c *APIClient) PostWithHeaders(url string, payload any, customHeaders map[string]string) (*http.Response, error) {
+func (c *APIClient) PostWithHeaders(url string, payload interface{}, customHeaders map[string]string) (*http.Response, error) {
 	return c.runRequestWithHeaders(http.MethodPost, url, payload, customHeaders)
 }
 
@@ -400,22 +401,22 @@ func (c *APIClient) PostMultipartWithHeaders(url string, payload map[string]io.R
 }
 
 // Put performs a Put request against the Redfish service.
-func (c *APIClient) Put(url string, payload any) (*http.Response, error) {
+func (c *APIClient) Put(url string, payload interface{}) (*http.Response, error) {
 	return c.PutWithHeaders(url, payload, nil)
 }
 
 // PutWithHeaders performs a Put request against the Redfish service but allowing custom headers
-func (c *APIClient) PutWithHeaders(url string, payload any, customHeaders map[string]string) (*http.Response, error) {
+func (c *APIClient) PutWithHeaders(url string, payload interface{}, customHeaders map[string]string) (*http.Response, error) {
 	return c.runRequestWithHeaders(http.MethodPut, url, payload, customHeaders)
 }
 
 // Patch performs a Patch request against the Redfish service.
-func (c *APIClient) Patch(url string, payload any) (*http.Response, error) {
+func (c *APIClient) Patch(url string, payload interface{}) (*http.Response, error) {
 	return c.PatchWithHeaders(url, payload, nil)
 }
 
 // PatchWithHeaders performs a Patch request against the Redfish service but allowing custom headers
-func (c *APIClient) PatchWithHeaders(url string, payload any, customHeaders map[string]string) (*http.Response, error) {
+func (c *APIClient) PatchWithHeaders(url string, payload interface{}, customHeaders map[string]string) (*http.Response, error) {
 	return c.runRequestWithHeaders(http.MethodPatch, url, payload, customHeaders)
 }
 
@@ -427,7 +428,7 @@ func (c *APIClient) Delete(url string) (*http.Response, error) {
 // DeleteWithHeaders performs a Delete request against the Redfish service but allowing custom headers
 func (c *APIClient) DeleteWithHeaders(url string, customHeaders map[string]string) (*http.Response, error) {
 	resp, err := c.runRequestWithHeaders(http.MethodDelete, url, nil, customHeaders)
-	defer schemas.DeferredCleanupHTTPResponse(resp)
+	defer common.DeferredCleanupHTTPResponse(resp)
 	if err != nil {
 		return nil, err
 	}
@@ -435,7 +436,7 @@ func (c *APIClient) DeleteWithHeaders(url string, customHeaders map[string]strin
 }
 
 // runRequestWithHeaders performs JSON REST calls but allowing custom headers
-func (c *APIClient) runRequestWithHeaders(method, url string, payload any, customHeaders map[string]string) (*http.Response, error) {
+func (c *APIClient) runRequestWithHeaders(method, url string, payload interface{}, customHeaders map[string]string) (*http.Response, error) {
 	if url == "" {
 		return nil, fmt.Errorf("unable to execute request, no target provided")
 	}
@@ -526,7 +527,7 @@ func (c *APIClient) releaseSemaphore() {
 // runRawRequestWithHeaders actually performs the REST calls but allowing custom headers
 func (c *APIClient) runRawRequestWithHeaders(method, url string, payloadBuffer io.ReadSeeker, contentType string, customHeaders map[string]string) (*http.Response, error) {
 	if url == "" {
-		return nil, schemas.ConstructError(0, []byte("unable to execute request, no target provided"))
+		return nil, common.ConstructError(0, []byte("unable to execute request, no target provided"))
 	}
 
 	endpoint := fmt.Sprintf("%s%s", c.endpoint, url)
@@ -550,7 +551,7 @@ func (c *APIClient) runRawRequestWithHeaders(method, url string, payloadBuffer i
 		if strings.EqualFold("Content-Length", k) {
 			req.ContentLength, err = strconv.ParseInt(v, 10, 64) // base 10, 64 bit
 			if err != nil {
-				return nil, schemas.ConstructError(0, []byte("error parsing custom Content-Length header"))
+				return nil, common.ConstructError(0, []byte("error parsing custom Content-Length header"))
 			}
 
 			continue
@@ -599,18 +600,18 @@ func (c *APIClient) runRawRequestWithHeaders(method, url string, payloadBuffer i
 	// Dump response if needed.
 	if c.dumpWriter != nil {
 		if err := c.dumpResponse(resp); err != nil {
-			defer schemas.DeferredCleanupHTTPResponse(resp)
+			defer common.DeferredCleanupHTTPResponse(resp)
 			return nil, err
 		}
 	}
 
 	if resp.StatusCode != 200 && resp.StatusCode != 201 && resp.StatusCode != 202 && resp.StatusCode != 204 {
-		defer schemas.DeferredCleanupHTTPResponse(resp)
+		defer common.DeferredCleanupHTTPResponse(resp)
 		payload, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return nil, schemas.ConstructError(0, []byte(err.Error()))
+			return nil, common.ConstructError(0, []byte(err.Error()))
 		}
-		return nil, schemas.ConstructError(resp.StatusCode, payload)
+		return nil, common.ConstructError(resp.StatusCode, payload)
 	}
 
 	return resp, err
@@ -620,7 +621,7 @@ func (c *APIClient) runRawRequestWithHeaders(method, url string, payloadBuffer i
 func (c *APIClient) dumpRequest(req *http.Request) error {
 	d, err := httputil.DumpRequestOut(req, true)
 	if err != nil {
-		return schemas.ConstructError(0, []byte(err.Error()))
+		return common.ConstructError(0, []byte(err.Error()))
 	}
 
 	d = append(d, '\n')
@@ -636,7 +637,7 @@ func (c *APIClient) dumpRequest(req *http.Request) error {
 func (c *APIClient) dumpResponse(resp *http.Response) error {
 	d, err := httputil.DumpResponse(resp, true)
 	if err != nil {
-		return schemas.ConstructError(0, []byte(err.Error()))
+		return common.ConstructError(0, []byte(err.Error()))
 	}
 
 	d = append(d, '\n')
@@ -673,35 +674,6 @@ func (c *APIClient) SetDumpWriter(writer io.Writer) {
 	c.dumpWriter = writer
 }
 
-func (c *APIClient) GetSettings() schemas.ClientSettings {
+func (c *APIClient) GetSettings() common.ClientSettings {
 	return c.Settings
-}
-
-// Deref is a convenience wrapper to get optional values from schema objects.
-//
-// Pointer values in objects are optional values, so if you want to see if the
-// service reported a value, then you need to explicitly check for nil:
-//
-//	// Did we get a display order?
-//	if attribuate.DisplayOrder {
-//			// Nothing reported
-//	}
-//
-// But if we don't care if it was reported by the service and we just want its
-// value, being fine with its zero-value if it wasn't provided, we can do:
-//
-//	var value int
-//	value = Deref(attribute.DisplayOrder)
-func Deref[T any](v *T) T {
-	var result T
-	if v == nil {
-		return result
-	}
-	return *v
-}
-
-// ToRef is a convenience wrapper to get a pointer to a value. This is useful
-// when assigning a value to an optional API object field that expects a pointer.
-func ToRef[T any](v T) *T {
-	return &v
 }
